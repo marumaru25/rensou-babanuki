@@ -638,34 +638,40 @@ try { return JSON.parse(match[0]); } catch(e){}
 return null;
 },
 
-async callAI(promptTxt) {
-let resText = null;
+async callAI(promptTxt, maxMs = 12000) {
 const F = window.FBM;
-if (F && F.modelFor && F.models && F.models.length) {
-const usedIdx = Math.min(this.mi|0, F.models.length-1), name = F.models[usedIdx];
-try {
+if (!(F && F.modelFor && F.models && F.models.length)) throw new Error("AI Request Failed");
 const t0 = Date.now();
+// 混雑しているモデルはしばらく避け、別のモデルで即リトライ
+this.busyUntil = this.busyUntil || {};
+const base = Math.min(this.mi|0, F.models.length-1);
+const order = F.models.map((_, k) => (base + k) % F.models.length).filter(k => k >= base || k > (this.mi|0) - 1);
+const cand = order.filter(k => !(this.busyUntil[k] > Date.now())).concat(order.filter(k => this.busyUntil[k] > Date.now()));
+for (const idx of cand.slice(0, 2)) {
+const left = maxMs - (Date.now() - t0);
+if (left < 1500) break;
+const name = F.models[idx];
 const run = fast => Promise.race([
 F.modelFor(name, fast).generateContent(promptTxt),
-new Promise((_, rej) => setTimeout(() => rej(new Error('AI timeout')), 12000))
+new Promise((_, rej) => setTimeout(() => rej(new Error('AI timeout')), Math.min(left, idx === cand[0] ? 7000 : left)))
 ]);
+try {
 let res;
 try { res = await run(!this.slowCfg); }
 catch(e1) {
-// 思考オフ設定に未対応のモデルなら、設定なしで即リトライ
 if (!this.slowCfg && /thinking|generation.?config|invalid.?argument|400/i.test(String(e1 && (e1.message || e1)))) { this.slowCfg = true; res = await run(false); }
 else throw e1;
 }
-resText = res && res.response && typeof res.response.text === 'function' ? res.response.text() : '';
+const txt = res && res.response && typeof res.response.text === 'function' ? res.response.text() : '';
 console.debug('AI', name, (Date.now() - t0) + 'ms');
+if (txt) return txt;
 } catch(e) {
-console.warn("AI Error", name, e);
-// モデルが廃止・未対応なら次の候補へ
-if (/not.?found|404|not supported|unsupported|billing|permission|invalid.?model/i.test(String(e && (e.message || e)))) { if ((this.mi|0) === usedIdx) this.mi = usedIdx + 1; }
+const msg = String(e && (e.message || e));
+console.warn("AI Error", name, msg.slice(0, 160));
+if (/not.?found|404|not supported|unsupported|billing|permission|invalid.?model/i.test(msg)) { if ((this.mi|0) === idx) this.mi = idx + 1; }
+else this.busyUntil[idx] = Date.now() + 60e3; // 混雑・タイムアウト → 1分間は別モデル優先
 }
 }
-
-if (resText) return resText;
 throw new Error("AI Request Failed");
 },
 
