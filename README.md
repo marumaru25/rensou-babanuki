@@ -1,13 +1,18 @@
-# 🃏 連想ババ抜き（GRAVITY版）
+# 🃏 連想ババ抜き（Firebase版）
 
-相手のカードを引き、手札で「つながる言葉」を作ってあがるパーティーゲーム。
-GRAVITY の AgentSDK（ルーム通信・AI）で動く単一HTMLです。
+相手のカードを引いて、手札の単語を「つながる言葉」でまとめて捨てていく連想ゲーム。ブラウザだけで遊べます。
 
-## 主な修正（2026-11-19）
-- CPUの番でゲームが止まるバグを修正（AI応答の正規化・CPUにも制限時間）
-- なりすましメッセージ対策（SYNC/LEAVE/CHAT/POPの送信者チェック、順序番号）
-- ゲーム中の退室ボタン追加、ホスト移譲の安定化
-- スコア送信を全クライアントで行うように
-- 投票の半数判定をルール通りに／棄権時の勝敗修正
-- CPUの性格（やさしい・ふつう・きびしい）を反映
-- UI修正（タイマー位置、トースト重なり、コピー失敗時の表示、IME確定Enter など）
+▶️ **遊ぶ**: https://marumaru25.github.io/rensou-babanuki/
+
+- 3〜8人（CPU追加OK・CPUの連想と投票は Gemini が判定）
+- ルームコード（4桁）／招待リンク／公開ルーム一覧
+- チャット・スタンプ・効果音・観戦・結果シェア
+- ホストが抜けても自動で引き継ぎ
+
+## 構成
+- `index.html` … ゲーム本体（1ファイル・バニラJS）
+- Firebase Realtime Database（通信）＋ 匿名認証
+- Firebase AI Logic（Gemini Developer API）
+- `database.rules.json` … データベースのセキュリティルール
+
+GRAVITY版は [rensou-babanuki-gravity](https://github.com/marumaru25/rensou-babanuki-gravity)。

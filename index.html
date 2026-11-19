@@ -4,7 +4,33 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>連想ババ抜き</title>
-<script src="https://cdn.gravity.place/fe/sdk/index-1.0.2.min.js"></script>
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js';
+import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js';
+import { getDatabase, ref, set, push, get, remove, update, onValue, onChildAdded, onChildRemoved, query, orderByChild, startAt, endAt, onDisconnect, serverTimestamp, runTransaction } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-database.js';
+import { getAI, getGenerativeModel, GoogleAIBackend } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-ai.js';
+const firebaseConfig = {
+    apiKey: "AIzaSyDkkiaL3GAPAczISAyAgevfDVR7NPHg-G4",
+    authDomain: "rensou-babanuki.firebaseapp.com",
+    databaseURL: "https://rensou-babanuki-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "rensou-babanuki",
+    storageBucket: "rensou-babanuki.firebasestorage.app",
+    messagingSenderId: "880546294105",
+    appId: "1:880546294105:web:40f5a45435fbbc9e9ec448"
+  };
+(async () => {
+  try {
+    const app = initializeApp(firebaseConfig);
+    const cred = await signInAnonymously(getAuth(app));
+    const db = getDatabase(app);
+    let ai = null;
+    try { ai = getAI(app, { backend: new GoogleAIBackend() }); } catch (e) { console.warn('AI init failed', e); }
+    const models = ["gemini-3.5-flash-lite","gemini-3.1-flash-lite","gemini-2.5-flash-lite","gemini-2.5-flash"];
+    const modelFor = name => ai ? getGenerativeModel(ai, { model: name }) : null;
+    window.__fbDone({ uid: cred.user.uid, db, ref, set, push, get, remove, update, onValue, onChildAdded, onChildRemoved, query, orderByChild, startAt, endAt, onDisconnect, serverTimestamp, runTransaction, models, modelFor });
+  } catch (e) { console.error('Firebase init failed', e); window.__fbDone(null); }
+})();
+</script>
 <style>
 :root{
 --bg1:#fff4e8; --bg2:#ffe3ec; --ink:#3b2f4a; --sub:#8a7c99; --card:#ffffff;
@@ -17,6 +43,8 @@
 html,body{margin:0;height:100%;font-family:"Hiragino Maru Gothic ProN","M PLUS Rounded 1c","Yu Gothic",system-ui,sans-serif;color:var(--ink);background:linear-gradient(160deg,var(--bg1),var(--bg2));overflow-x:hidden;overscroll-behavior:none}
 
 body.dragging{overflow:hidden;touch-action:none}
+body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+input,textarea{-webkit-user-select:text;user-select:text}
 
 button{font-family:inherit;border:none;cursor:pointer;border-radius:14px;font-weight:800;font-size:15px;padding:12px 16px;color:#fff;background:linear-gradient(135deg,var(--pri),var(--pri2));box-shadow:0 4px 0 #d9566c;transition:transform .08s}
 button:active{transform:translateY(2px);box-shadow:0 2px 0 #d9566c}
@@ -202,7 +230,7 @@ button.sub.ng{color:#fff;border-color:var(--ng)}
 
 <div id="top-spacer"></div>
 <div id="appbar">
-<div class="mockbar hidden" id="mockbar">※ モック通信モードで動作中</div>
+<div class="mockbar hidden" id="mockbar">※ オフライン（この端末だけ・CPUと対戦）</div>
 <div class="appbar-in">
 <div class="appbar-title">🃏 連想ババ抜き</div>
 <button class="hbtn" onclick="openModal('vol-modal')">🔊 音量</button>
@@ -242,6 +270,14 @@ button.sub.ng{color:#fff;border-color:var(--ng)}
 </select>
 </div>
 <button id="btn-create" style="margin-top:10px; width:100%;">👑 ルームを作成</button>
+</div>
+
+<div class="panel">
+<h2>🔑 コードで参加</h2>
+<div class="row">
+<input type="tel" id="inp-code" placeholder="4けたのルームコード" maxlength="4" inputmode="numeric" pattern="[0-9]*">
+<button id="btn-join-code" class="ok" style="flex:0 0 auto">参加</button>
+</div>
 </div>
 
 <div class="panel">
@@ -432,7 +468,7 @@ button.sub.ng{color:#fff;border-color:var(--ng)}
 <li>全員に<b>単語カード</b>を配ります（枚数はロビーで設定、標準10枚）。最初の手番はランダム。</li>
 <li>手番の人は<b>前の人の伏せ札から1枚</b>選んで「このカードを引く」で確定（45秒）。選んでいる様子はみんなに見えます。</li>
 <li>手札から<b>2枚以上</b>（何枚でもOK）選び、全部につながる言葉を発表。引いた札は使わなくてもOK。</li>
-<li>ほかの人は秘密で「👍 納得」「🤔 つながりにくい」を投票。あがった人も投票できます。CPUはAIが判定します。</li>
+<li>ほかの人は秘密で「👍 納得」「🤔 つながりにくい」を投票。あがった人も投票できます。CPUはAI（Gemini）が判定します。</li>
 <li><b>納得が半数以上</b>なら選んだカードを全部捨てる。ダメなら札は戻り、山札から<b>1枚追加</b>。</li>
 <li>思いつかない時は<b>パス</b>（山札から1枚追加）。</li>
 <li>手札が0枚になったら<b>あがり</b>！最後の1枚を次の人に引かれてもあがり。</li>
@@ -445,6 +481,9 @@ button.sub.ng{color:#fff;border-color:var(--ng)}
 
 <script>
 'use strict';
+let __fbResolve; window.FBReady = new Promise(r => __fbResolve = r);
+window.__fbDone = v => { window.FBM = v; __fbResolve(v); };
+setTimeout(() => __fbResolve(null), 12000);
 
 /* =========================================================
 モーダル制御
@@ -496,8 +535,7 @@ popT = setTimeout(()=>b.classList.add('hidden'), 1600);
 }
 
 /* Top Exclusion Zoneの計算 */
-const topExclusionHeight = window.innerHeight >= 812 ? 98 : 74;
-document.documentElement.style.setProperty('--top-exclusion', topExclusionHeight + 'px');
+document.documentElement.style.setProperty('--top-exclusion', 'env(safe-area-inset-top, 0px)');
 
 /* =========================================================
 状態変数・データ
@@ -597,18 +635,21 @@ return null;
 
 async callAI(promptTxt) {
 let resText = null;
-if (window.AgentSDK && window.AgentSDK.ai) {
+const F = window.FBM;
+if (F && F.modelFor && F.models && F.models.length) {
+const name = F.models[Math.min(this.mi|0, F.models.length-1)];
 try {
+const model = F.modelFor(name);
 const res = await Promise.race([
-window.AgentSDK.ai.chat({ messages: [{ role: 'user', content: promptTxt }] }),
+model.generateContent(promptTxt),
 new Promise((_, rej) => setTimeout(() => rej(new Error('AI timeout')), 15000))
 ]);
-if (res && (res.errno == null || Number(res.errno) === 0)) {
-const d = res.data;
-const pick = v => (typeof v === 'string') ? v : (v && typeof v === 'object') ? (v.content || v.text || v.message || JSON.stringify(v)) : (v == null ? '' : String(v));
-resText = typeof d === 'string' ? d : pick(d && (d.message ?? d.text ?? d.content ?? (d.choices && d.choices[0] && (d.choices[0].message || d.choices[0].text)) ?? d));
+resText = res && res.response && typeof res.response.text === 'function' ? res.response.text() : '';
+} catch(e) {
+console.warn("AI Error", name, e);
+// モデルが廃止・未対応なら次の候補へ
+if (/not.?found|404|not supported|unsupported|billing|permission|invalid.?model/i.test(String(e && (e.message || e)))) this.mi = (this.mi|0) + 1;
 }
-} catch(e) { console.warn("Gravity AI Error", e); }
 }
 
 if (resText) return resText;
@@ -774,63 +815,122 @@ return shuffle(w.map((t,i)=>({id:'c'+i,w:t})));
 通信 (Gravity AgentSDK / Mock)
 ========================================================= */
 const NET = {
-mode: 'mock', room: null, uid: 'u'+Math.floor(Math.random()*9999), cb: null, _listening: false,
+mode: 'mock', room: null, uid: '', cb: null, unsubs: [], offset: 0, _pub: '', _pubT: 0, _pubDisc: '',
 on(cb){ this.cb = cb; },
-listen(){
-if (this._listening) return;
-if (window.AgentSDK && window.AgentSDK.room) {
-window.AgentSDK.room.receiveMessage((payload) => {
-const { type, data } = payload;
-if (type === 'aitools_game_joinroom') {
-if (this.cb) this.cb({ type: 'join', uid: String(data.user_id), info: data });
-} else if (type === 'aitools_game_exitroom') {
-if (this.cb) this.cb({ type: 'exit', uid: String(data.user_id) });
-} else if (type === 'aitools_game_sendmsg') {
-try {
-const m = JSON.parse(data.msg_data);
-if (this.cb) this.cb({ type: 'msg', uid: String(data.user_id), data: m });
-} catch(e){}
-}
-});
-this._listening = true;
-}
-},
+now(){ return Date.now() + (this.offset|0); },
+F(){ return window.FBM; },
+r(path){ const F = this.F(); return F.ref(F.db, path); },
 async init(){
-if (!window.AgentSDK) {
-this.mode = 'mock'; this.uid = 'mock_' + Math.floor(Math.random()*9999); return { mode: 'mock', uid: this.uid };
-}
-try {
-const r = await window.AgentSDK.user.getMyUserInfo();
-if (r.errno === 0) { this.uid = String(r.data.user_id); me.name = r.data.name; me.portrait = r.data.portrait; }
-else { this.uid = LS.get('rb_uid','') || ('user_' + Math.floor(Math.random()*999999)); LS.set('rb_uid', this.uid); }
-this.mode = 'gravity';
-} catch(e) { this.mode = 'mock'; this.uid = 'mock_' + Math.floor(Math.random()*9999); }
+const F = await window.FBReady;
+if (!F) { this.mode = 'mock'; this.uid = LS.get('rb_uid','') || ('local_' + Math.floor(Math.random()*999999)); LS.set('rb_uid', this.uid); return { mode: 'mock', uid: this.uid }; }
+this.mode = 'firebase'; this.uid = F.uid;
+try { F.onValue(this.r('.info/serverTimeOffset'), sn => { this.offset = sn.val() || 0; }); } catch(e){}
 return { mode: this.mode, uid: this.uid };
 },
+_unlisten(){ this.unsubs.forEach(u => { try { u(); } catch(e){} }); this.unsubs = []; },
+_listen(code){
+this._unlisten();
+const F = this.F(), base = 'rooms/' + code;
+const since = this.now() - 3000;
+this.unsubs.push(F.onChildAdded(F.query(this.r(base + '/msgs'), F.orderByChild('t'), F.startAt(since)), sn => {
+const v = sn.val(); if (!v || v.from === this.uid || this.room !== code) return;
+let m; try { m = JSON.parse(v.d); } catch(e) { return; }
+if (this.cb) this.cb({ type: 'msg', uid: String(v.from), data: m });
+}));
+this.unsubs.push(F.onChildAdded(this.r(base + '/members'), sn => { if (sn.key !== this.uid && this.cb && this.room === code) this.cb({ type: 'join', uid: sn.key }); }));
+this.unsubs.push(F.onChildRemoved(this.r(base + '/members'), sn => { if (sn.key !== this.uid && this.cb && this.room === code) this.cb({ type: 'exit', uid: sn.key }); }));
+},
+async _enter(code){
+const F = this.F(), mref = this.r(`rooms/${code}/members/${this.uid}`);
+await F.set(mref, { name: String(me.name||'').slice(0,12), t: F.serverTimestamp() });
+try { F.onDisconnect(mref).remove(); } catch(e){}
+this.room = code; this._pub = ''; this._pubDisc = '';
+this._listen(code);
+},
 async create({max, perm}){
-if (this.mode === 'mock') { this.room = '1234'; this.listen(); return this.room; }
-const res = await window.AgentSDK.room.create({ max_players: max, room_permission: perm });
-if (res.errno === 0) { this.room = String(res.data.room_id); this.listen(); return this.room; }
-throw new Error(res.errmsg || 'Failed to create room');
+if (this.mode === 'mock') { this.room = 'LOCAL'; return this.room; }
+const F = this.F();
+for (let k = 0; k < 25; k++) {
+const code = String(1000 + Math.floor(Math.random()*9000));
+const res = await F.runTransaction(this.r(`rooms/${code}/meta`), cur => {
+if (cur && this.now() - (cur.t||0) < 6*3600e3) return; // 使用中
+return { max, perm, host: this.uid, t: this.now() };
+});
+if (!res.committed) continue;
+try { await F.remove(this.r(`rooms/${code}/msgs`)); await F.remove(this.r(`rooms/${code}/members`)); } catch(e){}
+await this._enter(code);
+return code;
+}
+throw new Error('ルームコードが取れませんでした');
 },
 async join(code){
-if (this.mode === 'mock') { this.room = code; this.listen(); return { ok: true }; }
-const res = await window.AgentSDK.room.join({ room_id: code });
-if (res.errno === 0) { this.room = code; this.listen(); return { ok: true }; }
-return { ok: false, msg: res.errmsg || '参加に失敗しました' };
+if (this.mode === 'mock') return { ok: false, msg: 'オフラインでは参加できません' };
+code = String(code);
+try {
+const meta = (await this.F().get(this.r(`rooms/${code}/meta`))).val();
+if (!meta || this.now() - (meta.t||0) > 6*3600e3) return { ok: false, msg: 'ルームが見つかりません' };
+const mem = (await this.F().get(this.r(`rooms/${code}/members`))).val() || {};
+const n = Object.keys(mem).filter(k => k !== this.uid).length;
+if (n >= (meta.max|0) + 4) return { ok: false, msg: 'ルームが満員です' };
+await this._enter(code);
+return { ok: true };
+} catch(e) { console.warn(e); return { ok: false, msg: '参加に失敗しました' }; }
 },
 async list(){
-if (this.mode === 'mock') return [{ code: '1234', n: 1, max: 4 }];
+if (this.mode === 'mock') return [];
 try {
-const res = await window.AgentSDK.room.getPublicRoomList();
-if (res.errno === 0) return res.data.list.map(x => ({ code: String(x.room_id), n: x.gamer_num, max: x.max_players }));
-} catch(e){}
-return [];
+const v = (await this.F().get(this.r('publicRooms'))).val() || {};
+const now = this.now();
+return Object.entries(v).filter(([c, x]) => x && now - (x.t||0) < 20*60e3)
+.sort((a, b) => (b[1].t||0) - (a[1].t||0)).slice(0, 30)
+.map(([c, x]) => ({ code: c, n: x.n|0, max: x.max|0, phase: x.phase || 'LOBBY' }));
+} catch(e) { return []; }
 },
-async send(m){ if (this.mode === 'mock') return; try { await window.AgentSDK.room.sendMessage({ message: JSON.stringify(m) }); } catch(e) {} },
-async exit(){ this.room = null; if (this.mode === 'mock') return; try { await window.AgentSDK.room.exit(); } catch(e) {} },
-async exists(code){ return true; },
-prune(){}
+async send(m){
+if (this.mode === 'mock' || !this.room) return;
+const F = this.F();
+try { await F.push(this.r(`rooms/${this.room}/msgs`), { from: this.uid, d: JSON.stringify(m), t: F.serverTimestamp() }); } catch(e) { console.warn('send failed', e); }
+},
+async exit(){
+const code = this.room; this.room = null; this._unlisten();
+if (this.mode === 'mock' || !code) return;
+const F = this.F();
+try {
+const mref = this.r(`rooms/${code}/members/${this.uid}`);
+try { await F.onDisconnect(mref).cancel(); } catch(e){}
+await F.remove(mref);
+const left = (await F.get(this.r(`rooms/${code}/members`))).val();
+if (!left) { await F.remove(this.r(`rooms/${code}`)); await F.remove(this.r(`publicRooms/${code}`)); }
+} catch(e) { console.warn(e); }
+},
+async exists(code){
+if (this.mode === 'mock') return false;
+try { const meta = (await this.F().get(this.r(`rooms/${code}/meta`))).val(); return !!meta && this.now() - (meta.t||0) < 6*3600e3; } catch(e) { return false; }
+},
+// ホストだけ：公開ルーム一覧の更新
+publish(st){
+if (this.mode === 'mock' || !this.room || !st) return;
+const F = this.F(), code = this.room;
+const pref = this.r(`publicRooms/${code}`);
+if ((st.perm|0) !== 0) return;
+const n = st.players.filter(p => p.role === 'player').length;
+const key = n + ':' + st.phase + ':' + (st.max|0);
+const now = Date.now();
+if (key === this._pub && now - this._pubT < 60e3) return;
+this._pub = key; this._pubT = now;
+F.set(pref, { n, max: st.max|0 || 8, phase: st.phase, t: F.serverTimestamp() }).catch(()=>{});
+if (this._pubDisc !== code) { this._pubDisc = code; try { F.onDisconnect(pref).remove(); } catch(e){} }
+},
+// ホストだけ：古いメッセージの掃除
+async prune(){
+if (this.mode === 'mock' || !this.room) return;
+const F = this.F();
+try {
+const old = (await F.get(F.query(this.r(`rooms/${this.room}/msgs`), F.orderByChild('t'), F.endAt(this.now() - 60e3)))).val();
+if (old) { const upd = {}; Object.keys(old).forEach(k => upd[k] = null); await F.update(this.r(`rooms/${this.room}/msgs`), upd); }
+F.set(this.r(`rooms/${this.room}/meta/t`), this.now()).catch(()=>{});
+} catch(e){}
+}
 };
 
 function copyText(text, okMsg){
@@ -851,7 +951,7 @@ updVolUI(); renderStamps();
 NET.on(onNet);
 const r = await NET.init();
 me.id = r.uid;
-if (r.mode === 'mock') $('mockbar').classList.remove('hidden');
+if (r.mode === 'mock') { $('mockbar').classList.remove('hidden'); toast('サーバーにつながりませんでした\nこの端末だけでCPUと遊べます', true); }
 me.name = me.name || LS.get('rb_name','');
 me.portrait = me.portrait || faceSvg(me.id);
 $('my-avatar').src = me.portrait;
@@ -862,7 +962,7 @@ refreshRooms();
 
 const q = new URLSearchParams(location.search);
 const rc = q.get('room') || q.get('code');
-if (rc && /^[\w-]{1,32}$/.test(rc)) {
+if (rc && /^\d{4}$/.test(rc)) {
 inviteRoomPending = rc; $('inv-code').textContent = rc; $('inv-name').value = $('inp-name').value;
 openModal('invite-modal');
 } else {
@@ -880,15 +980,16 @@ $('inp-name').value = $('inv-name').value;
 closeModal('invite-modal'); if (inviteRoomPending) joinRoom(inviteRoomPending, role); inviteRoomPending = null;
 };
 
-async function refreshRooms(){
-const el = $('room-list'); el.innerHTML = '<div class="muted">🔄 更新中…</div>';
+setInterval(() => { if (currentScreen === 'login' && !document.hidden) refreshRooms(true); }, 15000);
+async function refreshRooms(quiet){
+const el = $('room-list'); if (!quiet) el.innerHTML = '<div class="muted">🔄 更新中…</div>';
 try {
 const list = await NET.list();
 if (!list.length) { el.innerHTML = '<div class="muted" style="text-align:center;padding:10px">公開ルームはまだありません。<br>作ってみよう！</div>'; return; }
 el.innerHTML = '';
 list.forEach(x => {
 const d = document.createElement('div'); d.className = 'room-item';
-d.innerHTML = `<div><span class="code">${esc(x.code)}</span> <span class="muted">👤 ${x.n}/${x.max}</span></div>
+d.innerHTML = `<div><span class="code">${esc(x.code)}</span> <span class="muted">👤 ${x.n|0}/${x.max|0}${x.phase && x.phase !== 'LOBBY' ? ' ・ゲーム中' : ''}</span></div>
 <div class="row" style="flex:0 0 auto"><button class="small ok" data-j="player">参加</button><button class="sub small" data-j="spectator">👁</button></div>`;
 d.querySelectorAll('button').forEach(b => b.onclick = () => joinRoom(x.code, b.dataset.j));
 el.appendChild(d);
@@ -896,6 +997,8 @@ el.appendChild(d);
 } catch(e) { el.innerHTML = '<div class="muted">取得に失敗しました</div>'; }
 }
 $('btn-refresh').onclick = refreshRooms;
+$('btn-join-code').onclick = () => { const c = $('inp-code').value.replace(/\D/g,''); if (c.length !== 4) { $('inp-code').classList.add('err'); return toast('4けたのコードを入れてね', true); } joinRoom(c, 'player'); };
+$('inp-code').addEventListener('input', () => $('inp-code').classList.remove('err'));
 
 /* =========================================================
 ルーム作成 / 参加 / 退出
@@ -918,7 +1021,8 @@ isHost = true; myRole = 'player';
 hostState = newHostState(); hostState.code = code;
 addPlayer({id:me.id, name:me.name, portrait:me.portrait, role:'player'});
 rememberRoom(code); $('rejoin-panel').classList.add('hidden');
-hostState.max = max;
+hostState.max = max; hostState.perm = perm;
+clearInterval(pruneTimer); pruneTimer = setInterval(()=>{ if (isHost) NET.prune(); }, 30e3);
 screen('lobby'); broadcast(); startHostTick();
 sysChat(`${me.name} がルームを作りました`);
 } catch(e) { console.error(e); toast('ルーム作成に失敗しました', true); }
@@ -1054,7 +1158,8 @@ const mine = hostState.players.find(x=>x.id===me.id); if (mine) mine.isHost = tr
 if (hostState.phase === 'LOBBY' || hostState.phase === 'RESULT') hostState.players = hostState.players.filter(x=>x.id!==uid);
 if (hostState.phase === 'REVEAL') scheduleNextTurn();
 if (hostState.phase === 'VOTE') botVotesFor(hostState.pending);
-startHostTick(); broadcast();
+startHostTick(); NET._pub = ''; broadcast();
+clearInterval(pruneTimer); pruneTimer = setInterval(()=>{ if (isHost) NET.prune(); }, 30e3);
 sysChat(`👑 ${me.name} が新しいホストになりました`);
 if (old && old.quit) hostOnQuit(old);
 }
@@ -1083,7 +1188,7 @@ for (let k=1;k<=o.length;k++){ const p = o[((i + dir*k) % o.length + o.length) %
 return null;
 }
 function hlog(t){ hostState.log.unshift(t); hostState.log = hostState.log.slice(0,40); }
-function broadcast(){ if (!isHost || !hostState) return; hostState.ai = AI.ready; hostState.seq = (hostState.seq|0) + 1; const s = JSON.parse(JSON.stringify(hostState)); send({type:'SYNC', state:s}); botTick(); }
+function broadcast(){ if (!isHost || !hostState) return; hostState.ai = AI.ready; hostState.seq = (hostState.seq|0) + 1; const s = JSON.parse(JSON.stringify(hostState)); send({type:'SYNC', state:s}); NET.publish(hostState); botTick(); }
 function pop(text, sfx){ send({type:'POP', text, sfx}); }
 function sysChat(text){ if (isHost) send({type:'CHAT', id:me.id, name:'SYSTEM', text, sys:true}); }
 
@@ -1104,7 +1209,7 @@ const first = H.order[Math.floor(Math.random()*H.order.length)];
 hlog('🎲 ゲーム開始！');
 beginTurn(first);
 pop('ゲームスタート！', 'turn');
-if (NET.mode!=='mock') { clearInterval(pruneTimer); pruneTimer = setInterval(()=>NET.prune(), 30e3); }
+
 }
 function beginTurn(pid){
 const H = hostState;
@@ -1380,7 +1485,7 @@ const ord = st.order || [], mp = st.players.find(x=>x.id===me.id);
 const n = ord.length;
 let score = 0;
 if (mp && ord.includes(me.id)) score = mp.rank ? (n - mp.rank + 1) * 100 : (mp.quit ? 0 : (st.loserId === me.id ? 10 : 50));
-try { window.parent.postMessage({ type: 'gameOver', score }, '*'); } catch(e){}
+try { if (window.parent !== window) window.parent.postMessage({ type: 'gameOver', score }, '*'); } catch(e){}
 }
 
 function applyState(st){

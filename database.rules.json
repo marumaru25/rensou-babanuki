@@ -1,0 +1,35 @@
+{
+  "rules": {
+    "rooms": {
+      "$code": {
+        ".read": "auth != null",
+        ".write": "auth != null && !newData.exists()",
+        "meta": {
+          ".write": "auth != null"
+        },
+        "members": {
+          ".write": "auth != null && !newData.exists()",
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        },
+        "msgs": {
+          ".indexOn": [
+            "t"
+          ],
+          ".write": "auth != null && !newData.exists()",
+          "$m": {
+            ".write": "auth != null && (!newData.exists() || (!data.exists() && newData.child('from').val() === auth.uid))",
+            ".validate": "!newData.exists() || (newData.hasChildren(['from','d','t']) && newData.child('d').isString() && newData.child('d').val().length < 200000)"
+          }
+        }
+      }
+    },
+    "publicRooms": {
+      ".read": "auth != null",
+      "$code": {
+        ".write": "auth != null"
+      }
+    }
+  }
+}
