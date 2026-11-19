@@ -943,7 +943,7 @@ const checked = await Promise.all(cand.map(async ([c, x]) => {
 let mem = null;
 try { mem = (await F.get(this.r(`rooms/${c}/members`))).val(); } catch(e) {}
 const alive = mem && Object.keys(mem).length > 0 && x && now - (x.t||0) < 6*3600e3;
-if (!alive) { F.remove(this.r(`publicRooms/${c}`)).catch(()=>{}); if (!mem) F.remove(this.r(`rooms/${c}`)).catch(()=>{}); return null; }
+if (!alive) { F.remove(this.r(`publicRooms/${c}`)).catch(()=>{}); return null; }
 return { code: c, n: x.n|0, max: x.max|0, phase: x.phase || 'LOBBY' };
 }));
 return checked.filter(Boolean);
@@ -954,7 +954,7 @@ if (this.mode === 'mock' || !this.room) return;
 const F = this.F();
 try { await F.push(this.r(`rooms/${this.room}/msgs`), { from: this.uid, d: JSON.stringify(m), t: F.serverTimestamp() }); } catch(e) { console.warn('send failed', e); }
 },
-async exit(){
+async exit(keep){
 const code = this.room; this.room = null; this._unlisten();
 if (this.mode === 'mock' || !code) return;
 const F = this.F();
@@ -963,7 +963,7 @@ const mref = this.r(`rooms/${code}/members/${this.uid}`);
 try { await F.onDisconnect(mref).cancel(); } catch(e){}
 await F.remove(mref);
 const left = (await F.get(this.r(`rooms/${code}/members`))).val();
-if (!left) { await F.remove(this.r(`rooms/${code}`)); await F.remove(this.r(`publicRooms/${code}`)); }
+if (!left) { if (!keep) await F.remove(this.r(`rooms/${code}`)); await F.remove(this.r(`publicRooms/${code}`)); }
 } catch(e) { console.warn(e); }
 },
 async exists(code){
@@ -984,6 +984,14 @@ this._pub = key; this._pubT = now;
 F.set(pref, { n, max: st.max|0 || 8, phase: st.phase, t: F.serverTimestamp() }).catch(()=>{});
 if (this._pubDisc !== code) { this._pubDisc = code; try { F.onDisconnect(pref).remove(); } catch(e){} }
 },
+saveSnap(st){
+if (this.mode === 'mock' || !this.room || !st) return;
+try { this.F().set(this.r(`rooms/${this.room}/meta/snap`), JSON.stringify(st)).catch(()=>{}); } catch(e){}
+},
+async loadSnap(code){
+if (this.mode === 'mock') return null;
+try { const v = (await this.F().get(this.r(`rooms/${code}/meta/snap`))).val(); return v ? JSON.parse(v) : null; } catch(e) { return null; }
+},
 // ホストだけ：古いメッセージの掃除
 async prune(){
 if (this.mode === 'mock' || !this.room) return;
@@ -1002,7 +1010,7 @@ if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText
 else fallback();
 }
 window.confirmLeave = async function(inGame){
-const ok = await askConfirm('退出しますか？', inGame ? 'ゲームの途中で抜けると棄権になります。' : 'ルームから出ます。', '退出する');
+const ok = await askConfirm('退出しますか？', inGame ? 'あとで同じ席に復帰できます。\n抜けている間も時間は進み、自分の番は時間切れで自動パスになります。' : 'ルームから出ます。', '退出する');
 if (ok) leaveRoom(true);
 };
 
@@ -1102,7 +1110,24 @@ isHost = false; rememberRoom(code); $('rejoin-panel').classList.add('hidden');
 hostId = null;
 S = {phase:'LOBBY', players:[], settings:{hand:10,time:90,deck:'mix'}, code};
 screen('lobby'); renderLobby(); requestSync();
+setTimeout(async () => {
+if (NET.room !== code || isHost || S.players.find(p=>p.id===me.id)) return;
+const snap = await NET.loadSnap(code);
+if (snap && NET.room === code && !isHost && !S.players.find(p=>p.id===me.id)) becomeHostFrom(snap);
+}, 4000);
 } catch(e) { console.error(e); toast('参加できませんでした', true); }
+}
+function becomeHostFrom(st){
+isHost = true; hostState = st; hostState.epoch = (st.epoch|0) + 1; hostId = me.id;
+hostState.players.forEach(x => { x.isHost = false; if (!x.bot && x.id !== me.id) x.off = true; });
+let mine = hostState.players.find(x=>x.id===me.id);
+if (!mine) { addPlayer({id:me.id, name:me.name, portrait:me.portrait, role:'spectator'}); mine = hostState.players.find(x=>x.id===me.id); }
+mine.isHost = true; mine.off = false; mine.name = me.name || mine.name;
+if (hostState.phase === 'REVEAL') scheduleNextTurn();
+if (hostState.phase === 'VOTE') botVotesFor(hostState.pending);
+startHostTick(); NET._pub = ''; broadcast();
+clearInterval(pruneTimer); pruneTimer = setInterval(()=>{ if (isHost) NET.prune(); }, 30e3);
+sysChat(`👑 ${me.name} が戻ってゲームを再開しました`);
 }
 function requestSync(){
 const m = {type:'SYNC_REQUEST', userId:me.id, userName:me.name, portrait:me.portrait, role:myRole};
@@ -1111,13 +1136,16 @@ setTimeout(()=>{ if (NET.room && !isHost && !S.players.find(p=>p.id===me.id)) to
 }
 
 window.leaveRoom = async function(manual){
+const lastCode = NET.room;
+const wasInGame = !!lastCode && S.phase && S.phase !== 'LOBBY' && S.phase !== 'RESULT' && (S.order||[]).includes(me.id);
 if (manual && NET.room) send({type:'LEAVE', userId:me.id});
 await sleep(150);
-await NET.exit();
-if (manual) LS.del('rb_last_room');
+await NET.exit(wasInGame);
+if (manual && !wasInGame) LS.del('rb_last_room');
 clearInterval(hostTickTimer); clearInterval(clientTick); clearTimeout(revealTimer); clearInterval(pruneTimer);
 isHost=false; hostState=null; hostId=null; submitting=false; lastPhaseKey=''; viewAsId=null; S={phase:'LOBBY',players:[],settings:{hand:10,time:90,deck:'mix'}}; $('chat-msgs').innerHTML=''; myOrder=[];
-$('rejoin-panel').classList.add('hidden');
+if (wasInGame) { rememberRoom(lastCode); $('rejoin-code').textContent = lastCode; $('rejoin-panel').classList.remove('hidden'); $('btn-rejoin').onclick = () => joinRoom(lastCode, 'player'); }
+else $('rejoin-panel').classList.add('hidden');
 screen('login'); refreshRooms();
 };
 window.copyInvite = function(){
@@ -1209,14 +1237,14 @@ if (!ex || ex.bot || (ex.off && !manual) || ex.quit) return;
 const wasHost = ex.isHost;
 if (isHost) {
 if (hostState.phase === 'LOBBY' || hostState.phase === 'RESULT') { hostState.players = hostState.players.filter(x=>x.id!==uid); sysChat(`${ex.name} が退室しました`); }
-else { ex.off = true; if (manual) ex.quit = true; sysChat(`${ex.name} が${manual?'退室しました（棄権）':'切断されました'}`); if (manual) hostOnQuit(ex); else checkVoteDone(); }
+else { ex.off = true; sysChat(`${ex.name} が${manual?'退室しました':'切断されました'}（復帰できます）`); checkVoteDone(); }
 broadcast();
 } else if (wasHost) {
 const cand = S.players.filter(x=>x.id!==uid && !x.off && !x.quit && !x.bot);
 if (cand.length && cand[0].id === me.id) {
 isHost = true; hostState = JSON.parse(JSON.stringify(S)); hostState.epoch = (S.epoch|0) + 1; hostId = me.id;
 hostState.players.forEach(x=>x.isHost=false);
-const old = hostState.players.find(x=>x.id===uid); if (old) { old.off = true; if (manual) old.quit = true; }
+const old = hostState.players.find(x=>x.id===uid); if (old) { old.off = true; }
 const mine = hostState.players.find(x=>x.id===me.id); if (mine) mine.isHost = true;
 if (hostState.phase === 'LOBBY' || hostState.phase === 'RESULT') hostState.players = hostState.players.filter(x=>x.id!==uid);
 if (hostState.phase === 'REVEAL') scheduleNextTurn();
@@ -1251,7 +1279,7 @@ for (let k=1;k<=o.length;k++){ const p = o[((i + dir*k) % o.length + o.length) %
 return null;
 }
 function hlog(t){ hostState.log.unshift(t); hostState.log = hostState.log.slice(0,40); }
-function broadcast(){ if (!isHost || !hostState) return; hostState.ai = AI.ready; hostState.seq = (hostState.seq|0) + 1; const s = JSON.parse(JSON.stringify(hostState)); send({type:'SYNC', state:s}); NET.publish(hostState); botTick(); }
+function broadcast(){ if (!isHost || !hostState) return; hostState.ai = AI.ready; hostState.seq = (hostState.seq|0) + 1; const s = JSON.parse(JSON.stringify(hostState)); send({type:'SYNC', state:s}); NET.publish(hostState); NET.saveSnap(s); botTick(); }
 function pop(text, sfx){ send({type:'POP', text, sfx}); }
 function sysChat(text){ if (isHost) send({type:'CHAT', id:me.id, name:'SYSTEM', text, sys:true}); }
 
@@ -1284,8 +1312,8 @@ H.turnId = pid; H.pending = null; H.result = null; H.drawnId = null; H.hover = n
 try { const nx = nextActive(H, pid, 1); if (nx && nx.bot) botPrefetch(H, nx); if (p && p.bot && !botPlans[p.id]) botPrefetch(H, p); } catch(e){}
 const prev = nextActive(H, pid, -1);
 H.drawFromId = prev ? prev.id : null;
-if (prev && prev.hand.length) { H.phase = 'DRAW'; prev.hand = shuffle(prev.hand); setDeadline(p.bot ? 10 : (p.off ? 5 : 45)); }
-else { H.phase = 'COMPOSE'; setDeadline(p.bot ? 30 : (p.off ? 5 : H.settings.time)); }
+if (prev && prev.hand.length) { H.phase = 'DRAW'; prev.hand = shuffle(prev.hand); setDeadline(p.bot ? 10 : 45); }
+else { H.phase = 'COMPOSE'; setDeadline(p.bot ? 30 : H.settings.time); }
 broadcast();
 }
 function setDeadline(sec){ hostState.deadline = sec ? Date.now() + sec*1000 : 0; }
@@ -1326,7 +1354,7 @@ H.lastTake = {n:H.takeN, from:src.id, to:p.id, cid};
 hlog(`🃏 ${p.name} が ${src.name} から1枚引いた`);
 if (src.hand.length === 0) finishPlayer(src, '最後の1枚を引かれて');
 if (checkEnd()) return;
-H.phase = 'COMPOSE'; setDeadline(p.bot ? 30 : (p.off ? 5 : H.settings.time));
+H.phase = 'COMPOSE'; setDeadline(p.bot ? 30 : H.settings.time);
 broadcast();
 return;
 }
@@ -1779,6 +1807,7 @@ el.appendChild(d);
 });
 if (!watching) lastMyHandIds = hand.slice();
 $('hand-hint').classList.toggle('hidden', watching || hand.length < 2);
+$('hand-hint').textContent = composing ? '👆 タップで選択（連想タイム中は並べ替えできません）' : '✋ 長押し（PCはドラッグ）で並べ替え';
 $('compose').classList.toggle('hidden', !composing);
 if (composing) {
 const n = selCards.length;
@@ -1836,9 +1865,10 @@ return best;
 };
 hand.addEventListener('pointerdown', e => {
 const card = e.target.closest('.wcard'); if (!card || st || hand.classList.contains('readonly')) return;
-st = {id:card.dataset.id, el:card, x:e.clientX, y:e.clientY, pid:e.pointerId, type:e.pointerType, armed:e.pointerType==='mouse', ghost:null, moved:false};
+const composingNow = !viewAsId && S.turnId === me.id && S.phase === 'COMPOSE';
+st = {id:card.dataset.id, el:card, x:e.clientX, y:e.clientY, pid:e.pointerId, type:e.pointerType, armed:e.pointerType==='mouse' && !composingNow, ghost:null, moved:false};
 dragActive = true;
-if (e.pointerType !== 'mouse') st.timer = setTimeout(() => { if (!st) return; st.armed = true; st.el.classList.add('lift'); if (navigator.vibrate) navigator.vibrate(25); }, 260);
+if (e.pointerType !== 'mouse' && !composingNow) st.timer = setTimeout(() => { if (!st) return; st.armed = true; st.el.classList.add('lift'); if (navigator.vibrate) navigator.vibrate(25); }, 260);
 });
 window.addEventListener('pointermove', e => {
 if (!st || e.pointerId !== st.pid) return;
