@@ -642,7 +642,7 @@ try {
 const model = F.modelFor(name);
 const res = await Promise.race([
 model.generateContent(promptTxt),
-new Promise((_, rej) => setTimeout(() => rej(new Error('AI timeout')), 15000))
+new Promise((_, rej) => setTimeout(() => rej(new Error('AI timeout')), 25000))
 ]);
 resText = res && res.response && typeof res.response.text === 'function' ? res.response.text() : '';
 } catch(e) {
