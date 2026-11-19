@@ -327,7 +327,7 @@ button.sub.ng{color:#fff;border-color:var(--ng)}
 <option value="20">20枚</option>
 </select>
 </div>
-<div class="row"><div style="flex:1">連想タイム</div><select id="set-time"><option value="60">60秒</option><option value="90">90秒</option><option value="120">120秒</option></select></div>
+<div class="row"><div style="flex:1">連想タイム</div><select id="set-time"><option value="60">60秒</option><option value="90">90秒</option><option value="120">120秒</option><option value="0">なし</option></select></div>
 <div class="row"><div style="flex:1">使用デッキ</div><select id="set-deck"><option value="mix" selected>ミックス</option><option value="easy">かんたん</option><option value="normal">ふつう</option><option value="mid">ちょいむず</option><option value="hard">むずかしい</option></select></div>
 </div>
 
@@ -926,6 +926,7 @@ const meta = (await this.F().get(this.r(`rooms/${code}/meta`))).val();
 if (!meta || this.now() - (meta.t||0) > 6*3600e3) return { ok: false, msg: 'ルームが見つかりません' };
 const mem = (await this.F().get(this.r(`rooms/${code}/members`))).val() || {};
 const n = Object.keys(mem).filter(k => k !== this.uid).length;
+if (n === 0) { this.F().remove(this.r(`rooms/${code}`)).catch(()=>{}); this.F().remove(this.r(`publicRooms/${code}`)).catch(()=>{}); return { ok: false, msg: 'ルームに誰も残っていないので終了しました' }; }
 if (n >= (meta.max|0) + 4) return { ok: false, msg: 'ルームが満員です' };
 await this._enter(code);
 return { ok: true };
@@ -943,7 +944,7 @@ const checked = await Promise.all(cand.map(async ([c, x]) => {
 let mem = null;
 try { mem = (await F.get(this.r(`rooms/${c}/members`))).val(); } catch(e) {}
 const alive = mem && Object.keys(mem).length > 0 && x && now - (x.t||0) < 6*3600e3;
-if (!alive) { F.remove(this.r(`publicRooms/${c}`)).catch(()=>{}); return null; }
+if (!alive) { F.remove(this.r(`publicRooms/${c}`)).catch(()=>{}); if (!mem) F.remove(this.r(`rooms/${c}`)).catch(()=>{}); return null; }
 return { code: c, n: x.n|0, max: x.max|0, phase: x.phase || 'LOBBY' };
 }));
 return checked.filter(Boolean);
@@ -1110,11 +1111,6 @@ isHost = false; rememberRoom(code); $('rejoin-panel').classList.add('hidden');
 hostId = null;
 S = {phase:'LOBBY', players:[], settings:{hand:10,time:90,deck:'mix'}, code};
 screen('lobby'); renderLobby(); requestSync();
-setTimeout(async () => {
-if (NET.room !== code || isHost || S.players.find(p=>p.id===me.id)) return;
-const snap = await NET.loadSnap(code);
-if (snap && NET.room === code && !isHost && !S.players.find(p=>p.id===me.id)) becomeHostFrom(snap);
-}, 4000);
 } catch(e) { console.error(e); toast('参加できませんでした', true); }
 }
 function becomeHostFrom(st){
@@ -1140,7 +1136,7 @@ const lastCode = NET.room;
 const wasInGame = !!lastCode && S.phase && S.phase !== 'LOBBY' && S.phase !== 'RESULT' && (S.order||[]).includes(me.id);
 if (manual && NET.room) send({type:'LEAVE', userId:me.id});
 await sleep(150);
-await NET.exit(wasInGame);
+await NET.exit();
 if (manual && !wasInGame) LS.del('rb_last_room');
 clearInterval(hostTickTimer); clearInterval(clientTick); clearTimeout(revealTimer); clearInterval(pruneTimer);
 isHost=false; hostState=null; hostId=null; submitting=false; lastPhaseKey=''; viewAsId=null; S={phase:'LOBBY',players:[],settings:{hand:10,time:90,deck:'mix'}}; $('chat-msgs').innerHTML=''; myOrder=[];
@@ -1237,7 +1233,7 @@ if (!ex || ex.bot || (ex.off && !manual) || ex.quit) return;
 const wasHost = ex.isHost;
 if (isHost) {
 if (hostState.phase === 'LOBBY' || hostState.phase === 'RESULT') { hostState.players = hostState.players.filter(x=>x.id!==uid); sysChat(`${ex.name} が退室しました`); }
-else { ex.off = true; sysChat(`${ex.name} が${manual?'退室しました':'切断されました'}（復帰できます）`); checkVoteDone(); }
+else { ex.off = true; sysChat(`${ex.name} が${manual?'退室しました':'切断されました'}（復帰できます）`); if (hostState.turnId === uid && !hostState.deadline && (hostState.phase==='DRAW'||hostState.phase==='COMPOSE')) setDeadline(60); checkVoteDone(); }
 broadcast();
 } else if (wasHost) {
 const cand = S.players.filter(x=>x.id!==uid && !x.off && !x.quit && !x.bot);
@@ -1279,7 +1275,7 @@ for (let k=1;k<=o.length;k++){ const p = o[((i + dir*k) % o.length + o.length) %
 return null;
 }
 function hlog(t){ hostState.log.unshift(t); hostState.log = hostState.log.slice(0,40); }
-function broadcast(){ if (!isHost || !hostState) return; hostState.ai = AI.ready; hostState.seq = (hostState.seq|0) + 1; const s = JSON.parse(JSON.stringify(hostState)); send({type:'SYNC', state:s}); NET.publish(hostState); NET.saveSnap(s); botTick(); }
+function broadcast(){ if (!isHost || !hostState) return; hostState.ai = AI.ready; hostState.seq = (hostState.seq|0) + 1; const s = JSON.parse(JSON.stringify(hostState)); send({type:'SYNC', state:s}); NET.publish(hostState); botTick(); }
 function pop(text, sfx){ send({type:'POP', text, sfx}); }
 function sysChat(text){ if (isHost) send({type:'CHAT', id:me.id, name:'SYSTEM', text, sys:true}); }
 
@@ -1312,10 +1308,12 @@ H.turnId = pid; H.pending = null; H.result = null; H.drawnId = null; H.hover = n
 try { const nx = nextActive(H, pid, 1); if (nx && nx.bot) botPrefetch(H, nx); if (p && p.bot && !botPlans[p.id]) botPrefetch(H, p); } catch(e){}
 const prev = nextActive(H, pid, -1);
 H.drawFromId = prev ? prev.id : null;
-if (prev && prev.hand.length) { H.phase = 'DRAW'; prev.hand = shuffle(prev.hand); setDeadline(p.bot ? 10 : 45); }
-else { H.phase = 'COMPOSE'; setDeadline(p.bot ? 30 : H.settings.time); }
+if (prev && prev.hand.length) { H.phase = 'DRAW'; prev.hand = shuffle(prev.hand); setDeadline(p.bot ? 10 : lim(p, 45)); }
+else { H.phase = 'COMPOSE'; setDeadline(p.bot ? 30 : lim(p, H.settings.time)); }
 broadcast();
 }
+// 制限時間なし設定のときは人間の時間制限を外す（抜けている人だけは60秒で自動パス）
+function lim(p, sec){ return (hostState.settings.time|0) === 0 ? (p && p.off ? 60 : 0) : sec; }
 function setDeadline(sec){ hostState.deadline = sec ? Date.now() + sec*1000 : 0; }
 
 function hostAction(from, a){
@@ -1324,7 +1322,7 @@ const p = H.players.find(x=>x.id===from);
 if (a.t === 'START') { if (from===me.id && H.phase==='LOBBY') hostStart(); return; }
 if (a.t === 'SETTINGS') { if (from===me.id && H.phase==='LOBBY') { const ns = a.s || {};
 const hand = [5,7,8,10,12,15,20].includes(ns.hand|0) ? ns.hand|0 : H.settings.hand;
-const time = [60,90,120].includes(ns.time|0) ? ns.time|0 : H.settings.time;
+const time = (ns.time !== undefined && [0,60,90,120].includes(+ns.time)) ? +ns.time : H.settings.time;
 const deck = ['mix','easy','normal','mid','hard'].includes(ns.deck) ? ns.deck : H.settings.deck;
 H.settings = {hand, time, deck}; broadcast(); } return; }
 if (a.t === 'ADD_BOT') { if (from===me.id) hostAddBot(); return; }
@@ -1354,7 +1352,7 @@ H.lastTake = {n:H.takeN, from:src.id, to:p.id, cid};
 hlog(`🃏 ${p.name} が ${src.name} から1枚引いた`);
 if (src.hand.length === 0) finishPlayer(src, '最後の1枚を引かれて');
 if (checkEnd()) return;
-H.phase = 'COMPOSE'; setDeadline(p.bot ? 30 : H.settings.time);
+H.phase = 'COMPOSE'; setDeadline(p.bot ? 30 : lim(p, H.settings.time));
 broadcast();
 return;
 }
@@ -1366,7 +1364,7 @@ const voters = H.players.filter(x=>x.role==='player' && (H.order||[]).includes(x
 H.pending = {by:p.id, ids:uniq, word, note, voters, votes:{}, why:{}};
 hlog(`📣 ${p.name}「${word}」(${uniq.length}枚)`);
 if (!voters.length) return resolveVote();
-H.phase = 'VOTE'; setDeadline(60);
+H.phase = 'VOTE'; setDeadline(lim(null, 60));
 broadcast(); pop(`「${word}」`, 'submit');
 botVotesFor(H.pending);
 return;
@@ -1807,7 +1805,7 @@ el.appendChild(d);
 });
 if (!watching) lastMyHandIds = hand.slice();
 $('hand-hint').classList.toggle('hidden', watching || hand.length < 2);
-$('hand-hint').textContent = composing ? '👆 タップで選択（連想タイム中は並べ替えできません）' : '✋ 長押し（PCはドラッグ）で並べ替え';
+$('hand-hint').textContent = (!watching && S.phase==='DRAW' && S.drawFromId===me.id) ? '🔒 相手が選んでいる間は並べ替えできません' : (composing ? '👆 タップで選択 / 長押し（PCはドラッグ）で並べ替え' : '✋ 長押し（PCはドラッグ）で並べ替え');
 $('compose').classList.toggle('hidden', !composing);
 if (composing) {
 const n = selCards.length;
@@ -1865,10 +1863,10 @@ return best;
 };
 hand.addEventListener('pointerdown', e => {
 const card = e.target.closest('.wcard'); if (!card || st || hand.classList.contains('readonly')) return;
-const composingNow = !viewAsId && S.turnId === me.id && S.phase === 'COMPOSE';
-st = {id:card.dataset.id, el:card, x:e.clientX, y:e.clientY, pid:e.pointerId, type:e.pointerType, armed:e.pointerType==='mouse' && !composingNow, ghost:null, moved:false};
+const lockNow = !viewAsId && S.phase === 'DRAW' && S.drawFromId === me.id;
+st = {id:card.dataset.id, el:card, x:e.clientX, y:e.clientY, pid:e.pointerId, type:e.pointerType, armed:e.pointerType==='mouse' && !lockNow, ghost:null, moved:false};
 dragActive = true;
-if (e.pointerType !== 'mouse' && !composingNow) st.timer = setTimeout(() => { if (!st) return; st.armed = true; st.el.classList.add('lift'); if (navigator.vibrate) navigator.vibrate(25); }, 260);
+if (e.pointerType !== 'mouse' && !lockNow) st.timer = setTimeout(() => { if (!st) return; st.armed = true; st.el.classList.add('lift'); if (navigator.vibrate) navigator.vibrate(25); }, 260);
 });
 window.addEventListener('pointermove', e => {
 if (!st || e.pointerId !== st.pid) return;
@@ -1942,6 +1940,7 @@ function startClientTick(){
 clearInterval(clientTick);
 const pill = $('timer-pill');
 const upd = () => {
+if (!S.deadline && S.settings && (S.settings.time|0) === 0 && (S.phase==='DRAW'||S.phase==='COMPOSE'||S.phase==='VOTE')) { pill.classList.remove('hidden','warn'); $('timer-lbl').textContent = '制限時間'; $('timer-val').textContent = 'なし'; return; }
 if (!S.deadline || !(S.phase==='DRAW'||S.phase==='COMPOSE'||S.phase==='VOTE')) { pill.classList.add('hidden'); return; }
 const sec = Math.max(0, (S.deadline - Date.now())/1000);
 pill.classList.remove('hidden'); $('timer-val').textContent = fmtTime(sec);
