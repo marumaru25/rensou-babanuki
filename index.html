@@ -25,7 +25,7 @@ const firebaseConfig = {
     const db = getDatabase(app);
     let ai = null;
     try { ai = getAI(app, { backend: new GoogleAIBackend() }); } catch (e) { console.warn('AI init failed', e); }
-    const models = ["gemini-3.5-flash-lite","gemini-3.1-flash-lite","gemini-2.5-flash-lite","gemini-2.5-flash"];
+    const models = ["gemini-3.1-flash-lite","gemini-3.5-flash-lite","gemini-2.5-flash-lite"];
     const modelFor = (name, fast = true) => {
       if (!ai) return null;
       const generationConfig = { temperature: 0.7, maxOutputTokens: 256, responseMimeType: 'application/json' };
@@ -731,6 +731,36 @@ return j;
 await sleep(250);
 }
 return null;
+},
+
+async judgeMulti(words, targetWord, note, personaIdxs){
+const LAZY = /(にある|にいる|で使う|で見る|で見かける|っぽい|みたいな|ような|[いるうくすつぬむぶた])(もの|モノ|物|こと|やつ)$|^(まとまり|いろいろ|色々|グループ|仲間|共通点|種類|集まり|全般|身近|日常|いろんなもの)$/;
+const lazy = LAZY.test(String(targetWord||'').replace(/\s/g,''));
+const P = [['やさしい','おおらか。選ばれたカードの大半が自然につながればOK。迷ったらOK寄り。'],['ふつう','普通の大人の感覚。全部に無理なくつながればOK。1枚だけ少し苦しい程度ならOK。'],['きびしい','厳しめ。全部と自然につながっていないとNG。どれか1枚でも無理があればNG寄り。']];
+const judges = personaIdxs.map((pi, i) => `審査員${i+1}（${P[(pi|0)%3][0]}）：${P[(pi|0)%3][1]}`).join('\n');
+const prompt = `連想ゲーム「連想ババ抜き」の審査です。プレイヤーは手札から選んだカードを1つの言葉でつなげて発表しました。
+カード: 「${words.join('」、「')}」
+発表した言葉: 「${targetWord}」${note ? `\nプレイヤーの説明: ${note}` : ''}
+
+次の${personaIdxs.length}人の審査員として、それぞれの性格で独立に判定してください。
+${judges}
+
+【全員共通でNG】「〇〇にあるもの」「丸いもの」など説明文でまとめただけの答え、「仲間」「いろいろ」「共通点」などぼんやりした答え、ただの場所（家・学校）。
+【OK】全部が本当に当てはまる分類語（くだもの・動物など）や、「なるほど！」と思える具体的な言葉。
+
+JSONだけを返す: {"judges":[{"ok":true または false,"reason":"20文字以内の一言"}, ...]}（審査員${personaIdxs.length}人分を順番どおり）`;
+try {
+const j = this.extractJSON(await this.callAI(prompt));
+const arr = j && Array.isArray(j.judges) ? j.judges : null;
+if (!arr || arr.length < personaIdxs.length) return null;
+return personaIdxs.map((_, i) => {
+const x = arr[i] || {};
+let ok = x.ok === true || x.ok === 'true';
+let reason = x.reason ? String(x.reason).slice(0,30) : (ok ? 'OK' : 'NG');
+if (ok && lazy) { ok = false; reason = 'ざっくりしすぎかも'; }
+return { ok, reason };
+});
+} catch(e) { console.warn('AI Error (judgeMulti)', e); return null; }
 },
 
 async judge(words, targetWord, note, personaIdx){
@@ -1467,6 +1497,23 @@ return hostAction(turn.id, {t:'PASS'});
 function botVotesFor(pd){
 const H = hostState; if (!pd) return;
 const words = pd.ids.map(id=>H.words[id]);
+const bots = pd.voters.map(id=>H.players.find(p=>p.id===id)).filter(v=>v && v.bot && !(v.id in pd.votes));
+if (bots.length >= 2 && !pd._multiTried) {
+pd._multiTried = true;
+// CPUが2体以上なら1回のAI呼び出しでまとめて判定（速い＆無料枠にやさしい）
+botLater('vm:'+H.round+':'+(H.turnSeq|0), 100, async () => {
+const res = await AI.judgeMulti(words, pd.word, pd.note, bots.map(v=>v.persona||0));
+if (H.phase!=='VOTE' || H.pending !== pd) return;
+if (!res) { botVotesFor(pd); return; } // 失敗したら1体ずつ判定
+for (let i = 0; i < bots.length; i++) {
+const v = bots[i];
+if (H.phase!=='VOTE' || H.pending !== pd) return;
+if (!(v.id in pd.votes)) hostAction(v.id, {t:'VOTE', ok:res[i].ok, why: '🤖AI: ' + res[i].reason});
+if (i < bots.length - 1) await sleep(120);
+}
+});
+return;
+}
 pd.voters.forEach((vid, i) => {
 const v = H.players.find(p=>p.id===vid);
 if (!v || !v.bot || (vid in pd.votes)) return;
