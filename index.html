@@ -26,7 +26,12 @@ const firebaseConfig = {
     let ai = null;
     try { ai = getAI(app, { backend: new GoogleAIBackend() }); } catch (e) { console.warn('AI init failed', e); }
     const models = ["gemini-3.5-flash-lite","gemini-3.1-flash-lite","gemini-2.5-flash-lite","gemini-2.5-flash"];
-    const modelFor = name => ai ? getGenerativeModel(ai, { model: name }) : null;
+    const modelFor = (name, fast = true) => {
+      if (!ai) return null;
+      const generationConfig = { temperature: 0.7, maxOutputTokens: 256, responseMimeType: 'application/json' };
+      if (fast) generationConfig.thinkingConfig = /^gemini-2\.5/.test(name) ? { thinkingBudget: 0 } : { thinkingLevel: 'MINIMAL' };
+      return getGenerativeModel(ai, { model: name, generationConfig });
+    };
     window.__fbDone({ uid: cred.user.uid, db, ref, set, push, get, remove, update, onValue, onChildAdded, onChildRemoved, query, orderByChild, startAt, endAt, onDisconnect, serverTimestamp, runTransaction, models, modelFor });
   } catch (e) { console.error('Firebase init failed', e); window.__fbDone(null); }
 })();
@@ -639,12 +644,20 @@ const F = window.FBM;
 if (F && F.modelFor && F.models && F.models.length) {
 const name = F.models[Math.min(this.mi|0, F.models.length-1)];
 try {
-const model = F.modelFor(name);
-const res = await Promise.race([
-model.generateContent(promptTxt),
-new Promise((_, rej) => setTimeout(() => rej(new Error('AI timeout')), 25000))
+const t0 = Date.now();
+const run = fast => Promise.race([
+F.modelFor(name, fast).generateContent(promptTxt),
+new Promise((_, rej) => setTimeout(() => rej(new Error('AI timeout')), 12000))
 ]);
+let res;
+try { res = await run(!this.slowCfg); }
+catch(e1) {
+// 思考オフ設定に未対応のモデルなら、設定なしで即リトライ
+if (!this.slowCfg && /thinking|generation.?config|invalid.?argument|400/i.test(String(e1 && (e1.message || e1)))) { this.slowCfg = true; res = await run(false); }
+else throw e1;
+}
 resText = res && res.response && typeof res.response.text === 'function' ? res.response.text() : '';
+console.debug('AI', name, (Date.now() - t0) + 'ms');
 } catch(e) {
 console.warn("AI Error", name, e);
 // モデルが廃止・未対応なら次の候補へ
@@ -676,7 +689,7 @@ const LAZY = /(にある|にいる|で使う|で見る|で見かける|っぽい
 const isLazy = w => LAZY.test(String(w||'').replace(/\s/g,''));
 let prevLazyWord = '';
 
-for(let i=0; i<3; i++){
+for(let i=0; i<2; i++){
 try {
 let lazyAppend = "";
 if (prevLazyWord) {
@@ -715,7 +728,7 @@ continue;
 return j;
 }
 } catch(e) { console.warn("AI Error (compose)", e); }
-await sleep(1000);
+await sleep(250);
 }
 return null;
 },
@@ -749,7 +762,7 @@ const promptTxt = `あなたは連想ゲーム「連想ババ抜き」の審査�
 
 次のJSONだけを返してください: {"ok": true または false, "reason": "20文字以内の日本語の一言コメント"}`;
 
-for(let i=0; i<3; i++){
+for(let i=0; i<2; i++){
 try {
 const res = await this.callAI(promptTxt);
 const j = this.extractJSON(res);
@@ -764,7 +777,7 @@ rText = 'ざっくりしすぎかも';
 return { ok: isOk, reason: rText };
 }
 } catch(e) { console.warn("AI Error (judge)", e); }
-await sleep(1000);
+await sleep(250);
 }
 
 // AIが使えない時は五分五分で判定（全員NG固定や無限パスにならないように）
@@ -1219,8 +1232,8 @@ if (!p || p.rank || p.quit) { const n = nextActive(H, pid, 1); if (n) return beg
 H.turnId = pid; H.pending = null; H.result = null; H.drawnId = null; H.hover = null; H.turnSeq = (H.turnSeq|0) + 1;
 const prev = nextActive(H, pid, -1);
 H.drawFromId = prev ? prev.id : null;
-if (prev && prev.hand.length) { H.phase = 'DRAW'; prev.hand = shuffle(prev.hand); setDeadline(p.bot ? 20 : (p.off ? 5 : 45)); }
-else { H.phase = 'COMPOSE'; setDeadline(p.bot ? 60 : (p.off ? 5 : H.settings.time)); }
+if (prev && prev.hand.length) { H.phase = 'DRAW'; prev.hand = shuffle(prev.hand); setDeadline(p.bot ? 10 : (p.off ? 5 : 45)); }
+else { H.phase = 'COMPOSE'; setDeadline(p.bot ? 30 : (p.off ? 5 : H.settings.time)); }
 broadcast();
 }
 function setDeadline(sec){ hostState.deadline = sec ? Date.now() + sec*1000 : 0; }
@@ -1261,7 +1274,7 @@ H.lastTake = {n:H.takeN, from:src.id, to:p.id, cid};
 hlog(`🃏 ${p.name} が ${src.name} から1枚引いた`);
 if (src.hand.length === 0) finishPlayer(src, '最後の1枚を引かれて');
 if (checkEnd()) return;
-H.phase = 'COMPOSE'; setDeadline(p.bot ? 60 : (p.off ? 5 : H.settings.time));
+H.phase = 'COMPOSE'; setDeadline(p.bot ? 30 : (p.off ? 5 : H.settings.time));
 broadcast();
 return;
 }
@@ -1421,13 +1434,13 @@ if (!turn || !turn.bot) return;
 const tk = H.round + ':' + (H.turnSeq|0) + ':' + H.turnId;
 if (H.phase === 'DRAW') {
 const src = H.players.find(x=>x.id===H.drawFromId);
-botLater('d'+tk, 700, async () => {
+botLater('d'+tk, 300, async () => {
 const n = src ? src.hand.length : 1;
-for (let k=0;k<3;k++) { if (H.phase!=='DRAW' || H.turnId!==turn.id) return; hostAction(turn.id, {t:'HOVER', i:Math.floor(Math.random()*n)}); await sleep(650); }
+for (let k=0;k<2;k++) { if (H.phase!=='DRAW' || H.turnId!==turn.id) return; hostAction(turn.id, {t:'HOVER', i:Math.floor(Math.random()*n)}); await sleep(350); }
 if (H.phase==='DRAW' && H.turnId===turn.id) hostAction(turn.id, {t:'DRAW', i:H.hover ? H.hover.i : 0});
 });
 }
-if (H.phase === 'COMPOSE') botLater('c'+tk, 900, async () => {
+if (H.phase === 'COMPOSE') botLater('c'+tk, 150, async () => {
 if (H.phase!=='COMPOSE' || H.turnId!==turn.id) return;
 const ids = turn.hand.slice();
 let plan = null;
@@ -1457,7 +1470,7 @@ const words = pd.ids.map(id=>H.words[id]);
 pd.voters.forEach((vid, i) => {
 const v = H.players.find(p=>p.id===vid);
 if (!v || !v.bot || (vid in pd.votes)) return;
-botLater('v'+vid+':'+H.round+':'+(H.turnSeq|0), 600 + i*300, async () => {
+botLater('v'+vid+':'+H.round+':'+(H.turnSeq|0), 100 + i*80, async () => {
 let res = await AI.judge(words, pd.word, pd.note, v.persona||0);
 if (H.phase!=='VOTE' || H.pending !== pd || (vid in pd.votes)) return;
 if (!res) {
