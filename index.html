@@ -642,7 +642,7 @@ async callAI(promptTxt) {
 let resText = null;
 const F = window.FBM;
 if (F && F.modelFor && F.models && F.models.length) {
-const name = F.models[Math.min(this.mi|0, F.models.length-1)];
+const usedIdx = Math.min(this.mi|0, F.models.length-1), name = F.models[usedIdx];
 try {
 const t0 = Date.now();
 const run = fast => Promise.race([
@@ -661,7 +661,7 @@ console.debug('AI', name, (Date.now() - t0) + 'ms');
 } catch(e) {
 console.warn("AI Error", name, e);
 // モデルが廃止・未対応なら次の候補へ
-if (/not.?found|404|not supported|unsupported|billing|permission|invalid.?model/i.test(String(e && (e.message || e)))) this.mi = (this.mi|0) + 1;
+if (/not.?found|404|not supported|unsupported|billing|permission|invalid.?model/i.test(String(e && (e.message || e)))) { if ((this.mi|0) === usedIdx) this.mi = usedIdx + 1; }
 }
 }
 
@@ -1260,6 +1260,8 @@ if (checkEnd()) return;
 const p = H.players.find(x=>x.id===pid);
 if (!p || p.rank || p.quit) { const n = nextActive(H, pid, 1); if (n) return beginTurn(n.id); return; }
 H.turnId = pid; H.pending = null; H.result = null; H.drawnId = null; H.hover = null; H.turnSeq = (H.turnSeq|0) + 1;
+// 次の手番のCPUは今のうちに連想を考えておく（引かれるのは次の人の番まで無いので、手札から減らない）
+try { const nx = nextActive(H, pid, 1); if (nx && nx.bot) botPrefetch(H, nx); if (p && p.bot && !botPlans[p.id]) botPrefetch(H, p); } catch(e){}
 const prev = nextActive(H, pid, -1);
 H.drawFromId = prev ? prev.id : null;
 if (prev && prev.hand.length) { H.phase = 'DRAW'; prev.hand = shuffle(prev.hand); setDeadline(p.bot ? 10 : (p.off ? 5 : 45)); }
@@ -1456,6 +1458,18 @@ broadcast();
 AI.setup().then(ok => { if (ok !== H.ai) broadcast(); });
 }
 const botBusy = {};
+const botPlans = {};
+function botPrefetch(H, bot, force){
+if (!H || !bot || !bot.bot || bot.rank || bot.quit || bot.hand.length < 2) return null;
+const ids = bot.hand.slice();
+const key = H.round + ':' + ids.slice().sort().join(',');
+const cur = botPlans[bot.id];
+if (cur && cur.key === key && !(force && cur.done && !cur.plan)) return cur;
+const e = { key, ids, plan: null, done: false, t: Date.now() };
+e.promise = AI.compose(ids.map(id => H.words[id])).then(p => { e.plan = p; e.done = true; return p; }).catch(() => { e.done = true; return null; });
+botPlans[bot.id] = e;
+return e;
+}
 function botLater(key, ms, fn){ if (botBusy[key]) return; botBusy[key] = true; const H0 = hostState; setTimeout(async ()=>{ try { if (isHost && hostState && hostState === H0) await fn(); } catch(e){ console.warn('bot error', e); } finally { setTimeout(()=>delete botBusy[key], 3000); } }, ms); }
 function botTick(){
 const H = hostState; if (!H) return;
@@ -1473,13 +1487,18 @@ if (H.phase==='DRAW' && H.turnId===turn.id) hostAction(turn.id, {t:'DRAW', i:H.h
 if (H.phase === 'COMPOSE') botLater('c'+tk, 150, async () => {
 if (H.phase!=='COMPOSE' || H.turnId!==turn.id) return;
 const ids = turn.hand.slice();
+let e = botPlans[turn.id];
+if (!e || (e.done && !e.plan) || !e.ids.every(id => ids.includes(id) || !id)) e = botPrefetch(H, turn, true);
 let plan = null;
-try { plan = await AI.compose(ids.map(id=>H.words[id])); } catch(e) { plan = null; }
+// 先読み済みなら即答、まだなら最大8秒だけ待つ
+try { plan = e ? await Promise.race([e.promise, sleep(Math.max(0, 8000 - (Date.now() - e.t) * 0) )]) : null; } catch(err) { plan = null; }
 if (H.phase!=='COMPOSE' || H.turnId!==turn.id) return;
+const base = e ? e.ids : ids;
+if (plan && !plan.picks.map(i=>base[i]).every(id => id && ids.includes(id))) plan = null;
 
 // 成功した場合は提出、そうでない場合はパス
 if (plan) {
-const pickIds = Array.from(new Set(plan.picks.map(i=>ids[i]).filter(Boolean)));
+const pickIds = Array.from(new Set(plan.picks.map(i=>base[i]).filter(Boolean)));
 if (pickIds.length >= 2) {
 hostAction(turn.id, {t:'SUBMIT', ids:pickIds, word:String(plan.word).slice(0,20), note:String(plan.note||'').slice(0,80)});
 if (H.phase !== 'COMPOSE' || H.turnId !== turn.id) return;
@@ -1502,9 +1521,9 @@ if (bots.length >= 2 && !pd._multiTried) {
 pd._multiTried = true;
 // CPUが2体以上なら1回のAI呼び出しでまとめて判定（速い＆無料枠にやさしい）
 botLater('vm:'+H.round+':'+(H.turnSeq|0), 100, async () => {
-const res = await AI.judgeMulti(words, pd.word, pd.note, bots.map(v=>v.persona||0));
+let res = await Promise.race([AI.judgeMulti(words, pd.word, pd.note, bots.map(v=>v.persona||0)), sleep(9000).then(()=>null)]);
 if (H.phase!=='VOTE' || H.pending !== pd) return;
-if (!res) { botVotesFor(pd); return; } // 失敗したら1体ずつ判定
+if (!res) res = bots.map(() => ({ ok: Math.random() < 0.6, reason: '（AI混雑のため直感）' }));
 for (let i = 0; i < bots.length; i++) {
 const v = bots[i];
 if (H.phase!=='VOTE' || H.pending !== pd) return;
