@@ -882,6 +882,8 @@ const F = await window.FBReady;
 if (!F) { this.mode = 'mock'; this.uid = LS.get('rb_uid','') || ('local_' + Math.floor(Math.random()*999999)); LS.set('rb_uid', this.uid); return { mode: 'mock', uid: this.uid }; }
 this.mode = 'firebase'; this.uid = F.uid;
 try { F.onValue(this.r('.info/serverTimeOffset'), sn => { this.offset = sn.val() || 0; }); } catch(e){}
+try { F.onValue(this.r('.info/connected'), sn => { if (sn.val() === true && this.room) this._rePresence(); }); } catch(e){}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && this.room) this._rePresence(); });
 try {
 let wasConnected = null;
 F.onValue(this.r('.info/connected'), sn => {
@@ -908,6 +910,12 @@ if (this.cb) this.cb({ type: 'msg', uid: String(v.from), data: m });
 }));
 this.unsubs.push(F.onChildAdded(this.r(base + '/members'), sn => { if (sn.key !== this.uid && this.cb && this.room === code) this.cb({ type: 'join', uid: sn.key }); }));
 this.unsubs.push(F.onChildRemoved(this.r(base + '/members'), sn => { if (sn.key !== this.uid && this.cb && this.room === code) this.cb({ type: 'exit', uid: sn.key }); }));
+},
+_rePresence(){
+const F = this.F(), code = this.room; if (!F || !code || this.mode === 'mock') return;
+const mref = this.r(`rooms/${code}/members/${this.uid}`);
+F.set(mref, { name: String(me.name||'').slice(0,12), t: F.serverTimestamp() }).then(() => { try { F.onDisconnect(mref).remove(); } catch(e){} }).catch(()=>{});
+if (isHost) { this._pub = ''; this._pubDisc = ''; F.set(this.r(`rooms/${code}/meta/t`), this.now()).catch(()=>{}); if (hostState) broadcast(); }
 },
 async _enter(code){
 const F = this.F(), mref = this.r(`rooms/${code}/members/${this.uid}`);
@@ -940,7 +948,7 @@ const meta = (await this.F().get(this.r(`rooms/${code}/meta`))).val();
 if (!meta || this.now() - (meta.t||0) > 6*3600e3) return { ok: false, msg: 'ルームが見つかりません' };
 const mem = (await this.F().get(this.r(`rooms/${code}/members`))).val() || {};
 const n = Object.keys(mem).filter(k => k !== this.uid).length;
-if (n === 0) { this.F().remove(this.r(`rooms/${code}`)).catch(()=>{}); this.F().remove(this.r(`publicRooms/${code}`)).catch(()=>{}); return { ok: false, msg: 'ルームに誰も残っていないので終了しました' }; }
+if (n === 0 && this.now() - (meta.t||0) > 15*60e3) { this.F().remove(this.r(`rooms/${code}`)).catch(()=>{}); this.F().remove(this.r(`publicRooms/${code}`)).catch(()=>{}); return { ok: false, msg: 'ルームに誰も残っていないので終了しました' }; }
 if (n >= (meta.max|0) + 4) return { ok: false, msg: 'ルームが満員です' };
 await this._enter(code);
 return { ok: true };
@@ -957,8 +965,9 @@ const cand = Object.entries(v).sort((a, b) => ((b[1]&&b[1].t)||0) - ((a[1]&&a[1]
 const checked = await Promise.all(cand.map(async ([c, x]) => {
 let mem = null;
 try { mem = (await F.get(this.r(`rooms/${c}/members`))).val(); } catch(e) {}
-const alive = mem && Object.keys(mem).length > 0 && x && now - (x.t||0) < 6*3600e3;
-if (!alive) { F.remove(this.r(`publicRooms/${c}`)).catch(()=>{}); if (!mem) F.remove(this.r(`rooms/${c}`)).catch(()=>{}); return null; }
+const hasMem = mem && Object.keys(mem).length > 0;
+const fresh = x && now - (x.t||0) < 10*60e3;
+if (!(hasMem || fresh)) { if (!x || now - (x.t||0) > 30*60e3) { F.remove(this.r(`publicRooms/${c}`)).catch(()=>{}); if (!mem) F.remove(this.r(`rooms/${c}`)).catch(()=>{}); } return null; }
 return { code: c, n: x.n|0, max: x.max|0, phase: x.phase || 'LOBBY' };
 }));
 return checked.filter(Boolean);
@@ -1143,7 +1152,7 @@ sysChat(`👑 ${me.name} が戻ってゲームを再開しました`);
 }
 let lastSyncReq = 0;
 setInterval(() => {
-if (!NET.room || isHost || !S || !Array.isArray(S.players) || !S.players.length) return;
+if (!NET.room || isHost || !S || !Array.isArray(S.players)) return;
 if (S.players.find(p=>p.id===me.id) || Date.now() - lastSyncReq < 4000) return;
 lastSyncReq = Date.now();
 send({type:'SYNC_REQUEST', userId:me.id, userName:me.name, portrait:me.portrait, role:myRole});
@@ -1152,7 +1161,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && NE
 function requestSync(){
 const mk = () => ({type:'SYNC_REQUEST', userId:me.id, userName:me.name, portrait:me.portrait, role:myRole});
 [0,800,2000,4000,7000,10000,14000,18000].forEach((t,i)=>setTimeout(()=>{ if (NET.room && !isHost && (i===0 || !S.players.find(p=>p.id===me.id))) { lastSyncReq = Date.now(); send(mk()); } }, t));
-setTimeout(()=>{ if (NET.room && !isHost && !S.players.find(p=>p.id===me.id)) toast('ホストに接続できません。\n退室して入り直してみてね', true); }, 21000);
+setTimeout(()=>{ if (NET.room && !isHost && !S.players.find(p=>p.id===me.id)) toast('ホストの画面が閉じているかも…\nホストが画面に戻ると参加できます（このまま待ってね）', true); }, 15000);
 }
 
 window.leaveRoom = async function(manual){
