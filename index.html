@@ -6,9 +6,8 @@
 <title>連想ババ抜き</title>
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js';
-import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js';
+import { initializeAuth, indexedDBLocalPersistence, browserLocalPersistence, inMemoryPersistence, signInAnonymously } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-auth.js';
 import { getDatabase, ref, set, push, get, remove, update, onValue, onChildAdded, onChildRemoved, query, orderByChild, startAt, endAt, onDisconnect, serverTimestamp, runTransaction } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-database.js';
-import { getAI, getGenerativeModel, GoogleAIBackend } from 'https://www.gstatic.com/firebasejs/13.4.0/firebase-ai.js';
 const firebaseConfig = {
     apiKey: "AIzaSyDkkiaL3GAPAczISAyAgevfDVR7NPHg-G4",
     authDomain: "rensou-babanuki.firebaseapp.com",
@@ -21,18 +20,19 @@ const firebaseConfig = {
 (async () => {
   try {
     const app = initializeApp(firebaseConfig);
-    const cred = await signInAnonymously(getAuth(app));
+    const auth = initializeAuth(app, { persistence: [indexedDBLocalPersistence, browserLocalPersistence, inMemoryPersistence] });
+    const cred = await signInAnonymously(auth);
     const db = getDatabase(app);
-    let ai = null;
-    try { ai = getAI(app, { backend: new GoogleAIBackend() }); } catch (e) { console.warn('AI init failed', e); }
+    let AIM = null, ai = null;
     const models = ["gemini-3.1-flash-lite","gemini-3.5-flash-lite","gemini-2.5-flash-lite"];
     const modelFor = (name, fast = true) => {
-      if (!ai) return null;
+      if (!ai || !AIM) throw new Error('AI not ready');
       const generationConfig = { temperature: 0.7, maxOutputTokens: 256, responseMimeType: 'application/json' };
       if (fast) generationConfig.thinkingConfig = /^gemini-2\.5/.test(name) ? { thinkingBudget: 0 } : { thinkingLevel: 'MINIMAL' };
-      return getGenerativeModel(ai, { model: name, generationConfig });
+      return AIM.getGenerativeModel(ai, { model: name, generationConfig });
     };
     window.__fbDone({ uid: cred.user.uid, db, ref, set, push, get, remove, update, onValue, onChildAdded, onChildRemoved, query, orderByChild, startAt, endAt, onDisconnect, serverTimestamp, runTransaction, models, modelFor });
+    import('https://www.gstatic.com/firebasejs/13.4.0/firebase-ai.js').then(m => { AIM = m; ai = m.getAI(app, { backend: new m.GoogleAIBackend() }); }).catch(e => console.warn('AI load failed', e));
   } catch (e) { console.error('Firebase init failed', e); window.__fbDone(null); }
 })();
 </script>
@@ -240,7 +240,9 @@ button.sub.ng{color:#fff;border-color:var(--ng)}
 
 <div id="top-spacer"></div>
 <div id="appbar">
-<div class="mockbar hidden" id="mockbar">※ オフライン（この端末だけ・CPUと対戦）</div>
+<div class="mockbar hidden" id="mockbar">⚠️ サーバーにつながっていません（この端末だけでCPUと遊べます） <button class="small" style="padding:3px 8px;font-size:11px" onclick="location.reload()">🔄 再読み込み</button></div>
+<div class="mockbar" id="connbar" style="background:#7b6cff;color:#fff">⏳ サーバーに接続中…</div>
+<div class="mockbar hidden" id="inappbar" style="background:#fff3cd;color:#7a5a00">📱 アプリ内ブラウザで開いています。うまく参加できないときは、メニューから「ブラウザで開く」を選んでね</div>
 <div class="appbar-in">
 <div class="appbar-title">🃏 連想ババ抜き</div>
 <button class="hbtn" onclick="openModal('vol-modal')">🔊 音量</button>
@@ -494,7 +496,7 @@ button.sub.ng{color:#fff;border-color:var(--ng)}
 'use strict';
 let __fbResolve; window.FBReady = new Promise(r => __fbResolve = r);
 window.__fbDone = v => { window.FBM = v; __fbResolve(v); };
-setTimeout(() => __fbResolve(null), 12000);
+setTimeout(() => __fbResolve(null), 25000);
 
 /* =========================================================
 モーダル制御
@@ -675,7 +677,7 @@ if (txt) return txt;
 const msg = String(e && (e.message || e));
 console.warn("AI Error", name, msg.slice(0, 160));
 if (/not.?found|404|not supported|unsupported|billing|permission|invalid.?model/i.test(msg)) { if ((this.mi|0) === idx) this.mi = idx + 1; }
-else this.busyUntil[idx] = Date.now() + 60e3; // 混雑・タイムアウト → 1分間は別モデル優先
+else if (!/AI not ready/.test(msg)) this.busyUntil[idx] = Date.now() + 60e3; // 混雑・タイムアウト → 1分間は別モデル優先
 }
 }
 throw new Error("AI Request Failed");
@@ -880,6 +882,18 @@ const F = await window.FBReady;
 if (!F) { this.mode = 'mock'; this.uid = LS.get('rb_uid','') || ('local_' + Math.floor(Math.random()*999999)); LS.set('rb_uid', this.uid); return { mode: 'mock', uid: this.uid }; }
 this.mode = 'firebase'; this.uid = F.uid;
 try { F.onValue(this.r('.info/serverTimeOffset'), sn => { this.offset = sn.val() || 0; }); } catch(e){}
+try {
+let wasConnected = null;
+F.onValue(this.r('.info/connected'), sn => {
+const c = !!sn.val();
+if (c && wasConnected === false && this.room) {
+const mref = this.r(`rooms/${this.room}/members/${this.uid}`);
+F.set(mref, { name: String(me.name||'').slice(0,12), t: F.serverTimestamp() }).then(() => { try { F.onDisconnect(mref).remove(); } catch(e){} }).catch(()=>{});
+if (!isHost) setTimeout(() => send({type:'SYNC_REQUEST', userId:me.id, userName:me.name, portrait:me.portrait, role:myRole}), 300);
+}
+wasConnected = c;
+});
+} catch(e){}
 return { mode: this.mode, uid: this.uid };
 },
 _unlisten(){ this.unsubs.forEach(u => { try { u(); } catch(e){} }); this.unsubs = []; },
@@ -919,7 +933,7 @@ return code;
 throw new Error('ルームコードが取れませんでした');
 },
 async join(code){
-if (this.mode === 'mock') return { ok: false, msg: 'オフラインでは参加できません' };
+if (this.mode === 'mock') return { ok: false, msg: 'サーバーにつながっていません。\n上の「🔄 再読み込み」を押してね' };
 code = String(code);
 try {
 const meta = (await this.F().get(this.r(`rooms/${code}/meta`))).val();
@@ -1023,6 +1037,8 @@ updVolUI(); renderStamps();
 NET.on(onNet);
 const r = await NET.init();
 me.id = r.uid;
+$('connbar').classList.add('hidden');
+if (/Line\/|Instagram|FBAN|FBAV|TikTok|Twitter|MicroMessenger/i.test(navigator.userAgent)) $('inappbar').classList.remove('hidden');
 if (r.mode === 'mock') { $('mockbar').classList.remove('hidden'); toast('サーバーにつながりませんでした\nこの端末だけでCPUと遊べます', true); }
 me.name = me.name || LS.get('rb_name','');
 me.portrait = me.portrait || faceSvg(me.id);
@@ -1125,9 +1141,17 @@ startHostTick(); NET._pub = ''; broadcast();
 clearInterval(pruneTimer); pruneTimer = setInterval(()=>{ if (isHost) NET.prune(); }, 30e3);
 sysChat(`👑 ${me.name} が戻ってゲームを再開しました`);
 }
+let lastSyncReq = 0;
+setInterval(() => {
+if (!NET.room || isHost || !S || !Array.isArray(S.players) || !S.players.length) return;
+if (S.players.find(p=>p.id===me.id) || Date.now() - lastSyncReq < 4000) return;
+lastSyncReq = Date.now();
+send({type:'SYNC_REQUEST', userId:me.id, userName:me.name, portrait:me.portrait, role:myRole});
+}, 3000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && NET.room && !isHost) { lastSyncReq = Date.now(); send({type:'SYNC_REQUEST', userId:me.id, userName:me.name, portrait:me.portrait, role:myRole}); } });
 function requestSync(){
-const m = {type:'SYNC_REQUEST', userId:me.id, userName:me.name, portrait:me.portrait, role:myRole};
-[0,800,2000,4000,7000,10000,14000,18000].forEach((t,i)=>setTimeout(()=>{ if (NET.room && !isHost && (i===0 || !S.players.find(p=>p.id===me.id))) send(m); }, t));
+const mk = () => ({type:'SYNC_REQUEST', userId:me.id, userName:me.name, portrait:me.portrait, role:myRole});
+[0,800,2000,4000,7000,10000,14000,18000].forEach((t,i)=>setTimeout(()=>{ if (NET.room && !isHost && (i===0 || !S.players.find(p=>p.id===me.id))) { lastSyncReq = Date.now(); send(mk()); } }, t));
 setTimeout(()=>{ if (NET.room && !isHost && !S.players.find(p=>p.id===me.id)) toast('ホストに接続できません。\n退室して入り直してみてね', true); }, 21000);
 }
 
@@ -1146,7 +1170,7 @@ screen('login'); refreshRooms();
 };
 window.copyInvite = function(){
 const c = S.code || NET.room || '';
-const url = location.origin + location.pathname + '?room=' + c;
+const url = location.origin + location.pathname + '?room=' + c + '&openExternalBrowser=1';
 copyText(`🃏 連想ババ抜きであそぼう！\nルームコード: ${c}\n${url}`, '📋 招待をコピーしました\nコード: ' + c);
 };
 
@@ -1648,7 +1672,12 @@ $('set-hand').value = S.settings.hand; $('set-time').value = S.settings.time; $(
 $('host-only-note').textContent = isHost ? '' : '（ホストが設定）';
 $('btn-start').style.display = isHost ? '' : 'none';
 const n = ps.filter(p=>p.role==='player' && !p.off).length, min = 2;
-$('start-note').textContent = isHost ? (n<min ? `あと${min-n}人で開始できます（CPUもOK）` : 'みんな揃ったらスタート！') : 'ホストの開始を待っています…';
+const specN = ps.filter(p=>p.role==='spectator' && !p.off).length, offN = ps.filter(p=>p.role==='player' && p.off).length;
+let why = '';
+if (n < min && specN) why += `\n👁 観戦になっている人が${specN}人います（その人が「🎮 プレイヤーにする」を押すと参加できます）`;
+if (n < min && offN) why += `\n📶 接続が切れている人が${offN}人います（つながると自動で戻ります）`;
+$('start-note').style.whiteSpace = 'pre-line';
+$('start-note').textContent = isHost ? (n<min ? `あと${min-n}人で開始できます（CPUもOK）` + why : 'みんな揃ったらスタート！') : (myRole==='spectator' ? '今は観戦です。遊ぶなら「🎮 プレイヤーにする」を押してね' : 'ホストの開始を待っています…');
 $('btn-start').disabled = n < min || n > 8;
 }
 $('btn-start').onclick = () => act({t:'START'});
